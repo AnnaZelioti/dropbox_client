@@ -12,9 +12,9 @@
 
 int main(int argc, char* argv[]){
 
-	char serverIP[10], buf[1024], myIP[12], command[14], recip[14], recClientPort[10], *ip;
+	char serverIP[10], buf[1024], myIP[12], command[14], recip[14], recClientPort[10], num[10], *ip;
 	long int lip;
-	int port, iport, serverPort, sock, newsocket, mysock, n, m, receiveLen, c, clientPort;
+	int port, iport, serverPort, sock, newsocket, mysock, n, m, receiveLen, c, clientPort, numOfClients;
 	socklen_t clientlen;
 	struct sockaddr_in server, client, myserver, dummy;
 	struct sockaddr *serverptr = (struct sockaddr *) &server;
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]){
 	m=numOfDigits(dummy.sin_addr.s_addr);
 	snprintf(buf, 9 + strlen(myIP) + n +m, "LOG_ON %u %d" , dummy.sin_addr.s_addr, htons(port) );
     //Send the character
-    if(send(sock,buf,strlen(buf),0)==-1)
+    if(send(sock,&buf,strlen(buf),0)==-1)
 		perror_exit("write");
 close(sock);
 
@@ -74,27 +74,43 @@ close(sock);
 	printf("Connecting to %s serverPort %d\n",argv[4],serverPort);
 
 	//Send the GET_CLIENTS request 
-	if(send(sock, "GET_CLIENTS", strlen("GET_CLIENTS"),0)==-1)
+	if(send(sock, "GET_CLIENTS", strlen("GET_CLIENTS") +1 ,0)==-1)
 		perror_exit("write");
 
 	while(1){
 		//Receive client list
-		receiveLen = recv(sock, buf, 1024 ,0);
+		receiveLen = recv(sock, &buf, sizeof(buf) ,0);
     	if (receiveLen == -1){
         	printf("Error: receive has been  %d\n",sock);
         	close(sock);
 			perror_exit("receive");
     	}
-		//Insert received client to list 
-		lip=atol(recip);  // Convert to long int 
-		dummy.sin_addr.s_addr=lip;
-		ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123)
-		iport=atoi(recClientPort);
-		clientPort=ntohs(iport);
-		insertList(&clientList, ip, clientPort);
 		printf("I received %s\n", buf);
+		sscanf(buf, "%s %s", command, num);
+		numOfClients=atoi(num);
+		while(numOfClients){
+			receiveLen = recv(sock, &buf, sizeof(buf) ,0);
+    		if (receiveLen == -1){
+        		printf("Error: receive has been  %d\n",sock);
+        		close(sock);
+				perror_exit("receive");
+    		}			
+			sscanf(buf,	"%s %s",recip, recClientPort);	
+	
+			//Convert ip and port to the correct format 
+			lip=atol(recip);  // Convert to long int 
+			dummy.sin_addr.s_addr=lip;
+			ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123)
+			iport=atoi(recClientPort);
+			clientPort=ntohs(iport);
+					printf("I received %s\n", buf);
+			//Insert received client to list
+			insertList(&clientList, ip, clientPort);
+			numOfClients--;
+		}
 		break;
 	}
+print(clientList);
 	//Close socket 
 	close(sock);
 
@@ -131,7 +147,7 @@ close(sock);
     	}
     	printf("Accepted connection from %s\n", rem->h_name);
 
-		receiveLen = recv(newsocket, buf, 1024 ,0);
+		receiveLen = recv(newsocket, &buf, 1024 ,0);
     	if (receiveLen == -1){
         	printf("Error: receive has been  %d\n", newsocket);
         	close(newsocket);
