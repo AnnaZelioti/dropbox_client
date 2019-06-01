@@ -6,29 +6,35 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <string.h>
+#include <arpa/inet.h>
 #include "header.h"
 
 
 int main(int argc, char* argv[]){
 
-	char serverIP[10], buf[1024], myIP[12];
-	int port, serverPort, sock, newsocket, mysock, n, receiveLen;
+	char serverIP[10], buf[1024], myIP[12], command[14], recip[14], recClientPort[10], *ip;
+	long int lip;
+	int port, iport, serverPort, sock, newsocket, mysock, n, m, receiveLen, c, clientPort;
 	socklen_t clientlen;
-	struct sockaddr_in server, client, myserver;
+	struct sockaddr_in server, client, myserver, dummy;
 	struct sockaddr *serverptr = (struct sockaddr *) &server;
 	struct sockaddr *clientptr = (struct sockaddr *) &client;
 	struct sockaddr *myserverptr= (struct sockaddr *) &myserver;
 	struct hostent *rem;
+	listptr clientList=NULL;
 	
 
-	if(argc<3){
-		printf("Please give port number!\n");
+	if(argc<6){
+		printf("Please give all inputs!\n");
+		printf("Example: ./server -p portNum -sp serverPort -sip serverIP\n");
 		exit(1);
 	}
 	strcpy(myIP, "127.0.0.1");
 	strcpy(serverIP,argv[6]);
 	port=atoi(argv[2]);
 	serverPort=atoi(argv[4]);
+
+	//Connect to server
 
 	//Create socket
 	if((sock=socket(AF_INET,SOCK_STREAM,0))<0)
@@ -50,23 +56,44 @@ int main(int argc, char* argv[]){
 	printf("Connecting to %s serverPort %d\n",argv[4],serverPort);
 
 	//message="LOG_ON"
-	n=numOfDigits(port);
-	snprintf(buf, 9 + strlen(myIP) + n , "LOG_ON %s %d" , myIP, port );
+	inet_aton(myIP,&dummy.sin_addr);
+	n=numOfDigits(htons(port));
+	m=numOfDigits(dummy.sin_addr.s_addr);
+	snprintf(buf, 9 + strlen(myIP) + n +m, "LOG_ON %u %d" , dummy.sin_addr.s_addr, htons(port) );
     //Send the character
     if(send(sock,buf,strlen(buf),0)==-1)
 		perror_exit("write");
-	
-    //Recieve the character
-//	if(recv(sock, buf,strlen(buf), 0)==-1)
-//	    perror_exit("read");
-    
-//    printf("Recieved sting: %s",buf);
-
-
-
-	//Close socket and exit
+	//close socket
 	close(sock);
 
+	//new connection for getclients request
+	//Initiate Connection
+	if((connect(sock,serverptr,sizeof(server)))<0)
+ 	   perror_exit("connect");
+	printf("Connecting to %s serverPort %d\n",argv[4],serverPort);
+
+	//Send the GET_CLIENTS request 
+	if(send(sock, "GET_CLIENTS", strlen("GET_CLIENTS"),0)==-1)
+		perror_exit("write");
+
+	while(1){
+		//Receive client list
+		receiveLen = recv(sock, buf, 1024 ,0);
+    	if (receiveLen == -1){
+        	printf("Error: receive has been  %d\n",sock);
+        	close(sock);
+			perror_exit("receive");
+    	}
+		//Insert received client to list 
+		//insertList(&clientList, clientIp, clientPort);
+		printf("I received %s\n", buf);
+		break;
+	}
+	//Close socket 
+	close(sock);
+
+	//Set up  and wait for connections from other clients or the server
+ 
 	//Create socket 
 	if((mysock=socket(AF_INET,SOCK_STREAM,0))<0)
    		perror_exit("socket");
@@ -105,6 +132,45 @@ int main(int argc, char* argv[]){
         	exit(1);
     	}
 		printf("I received %s\n", buf);
+
+		sscanf(buf,"%s %s %s", command, recip, recClientPort);
+		printf("Received command: <%s>\n",command);
+		lip=atol(recip);  // Convert to long int
+		ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123) 
+		dummy.sin_addr.s_addr=lip;
+
+		iport=atoi(recClientPort);
+		clientPort=ntohs(iport);
+
+		if( strcmp(command, "GET_FILE_LIST")==0) 
+			c=1;
+		if(strcmp(command, "GET_FILE")==0) 
+			c=2;
+		if(strcmp(command, "USER_OFF")==0)
+			c=3;
+		if(strcmp(command, "USER_ON")==0)
+			c=4;
+
+		switch(c){
+			case 1:
+				//GET_FILE_LIST
+				break;
+			case 2:
+				//GET_FILE
+				break;
+			case 3:
+				//USER_OFF
+				break;
+			case 4:
+				//USER_ON
+				printf("IP: %s, port: %d\n", ip, clientPort);
+				
+				break;
+			default:
+				printf("Unknown command. Doing nothing!\n");
+				break;
+		}
+
 		close(newsocket);
 		break;
 	}

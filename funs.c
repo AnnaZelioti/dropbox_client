@@ -13,7 +13,7 @@
 
 
 //List functions
-void insertList(listptr* mylist, char* name) {
+void insertList(listptr* mylist, char* IP, int port) {
     listptr temp;
     temp=*mylist;
 
@@ -24,9 +24,25 @@ void insertList(listptr* mylist, char* name) {
 	}
 
     (*mylist)->next=temp;
-	(*mylist)->filename=malloc(strlen(name) + 1);
-	strcpy((*mylist)->filename,name);
+	(*mylist)->clientIP=malloc(strlen(IP) + 1);
+	strcpy((*mylist)->clientIP,IP);
+	(*mylist)->clientPort=port;
 
+}
+int deleteClient(listptr *mylist, char* IP, int port){ 
+	listptr templist;
+  	while ((*mylist) != NULL) {  
+    	if((strcmp((*mylist)->clientIP,IP)==0)&&((*mylist)->clientPort==port)){
+      		templist = *mylist;         
+      		*mylist = (*mylist)->next;
+			free(templist->clientIP);	       
+      		free(templist);    
+      		return 1;                          
+    	}
+    	else
+     	mylist = &((*mylist)->next);
+}
+  	return 0;        
 }
 
 void destroyList(listptr *mylist){
@@ -35,15 +51,15 @@ void destroyList(listptr *mylist){
 	while((*mylist)!=NULL){
 		temp=*mylist;
 		(*mylist)=(*mylist)->next;
-		free(temp->filename);
+		free(temp->clientIP);
 		free(temp);
 	}
 }
 
-int isInList(listptr mylist, char* name){
+int isInList(listptr mylist, char* IP, int port){
 
 	while(mylist!=NULL){
-		if(strcmp(mylist->filename,name)==0){
+		if((strcmp(mylist->clientIP,IP)==0)&&(mylist->clientPort==port)){
 			printf("Found it.\n");
 			return 1;
 		}
@@ -56,7 +72,7 @@ int isInList(listptr mylist, char* name){
 
 void print(listptr list){ 
 	while (list != NULL) {      
-	    printf("%s--> ", list->filename);      
+	    printf("IP %s, port %d --> ", list->clientIP, list->clientPort);      
 		list = list->next;               
 	}
 	printf("NULL\n"); 
