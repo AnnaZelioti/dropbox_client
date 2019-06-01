@@ -63,10 +63,11 @@ int main(int argc, char* argv[]){
     //Send the character
     if(send(sock,buf,strlen(buf),0)==-1)
 		perror_exit("write");
-	//close socket
-	close(sock);
+close(sock);
 
 	//new connection for getclients request
+	if((sock=socket(AF_INET,SOCK_STREAM,0))<0)
+ 	   perror_exit("socket");
 	//Initiate Connection
 	if((connect(sock,serverptr,sizeof(server)))<0)
  	   perror_exit("connect");
