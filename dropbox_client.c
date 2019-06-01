@@ -85,7 +85,12 @@ int main(int argc, char* argv[]){
 			perror_exit("receive");
     	}
 		//Insert received client to list 
-		//insertList(&clientList, clientIp, clientPort);
+		lip=atol(recip);  // Convert to long int 
+		dummy.sin_addr.s_addr=lip;
+		ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123)
+		iport=atoi(recClientPort);
+		clientPort=ntohs(iport);
+		insertList(&clientList, ip, clientPort);
 		printf("I received %s\n", buf);
 		break;
 	}
