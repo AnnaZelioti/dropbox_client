@@ -23,3 +23,4 @@ void print(listptr);
 int numOfDigits(int);
 void perror_exit(char* message);
 int numOfDigits(int num);
+void listFiles(char*, listptr*);

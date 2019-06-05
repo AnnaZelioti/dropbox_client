@@ -2,37 +2,230 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 #include "header.h"
+#include <signal.h>
+#include <fcntl.h>
+
+pthread_mutex_t accept_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
+listptr clientList=NULL;
+listptr fileList=NULL;
+int bufSize;
+
+
+void signal_handler(int signo){
+	if(signo==SIGINT)
+		printf("I received sigint\n");
+	//run=0;
+	return;
+} 
+
+void listen_for_conns(void *listenSocket) {
+	struct sockaddr_in client, dummy;
+	struct sockaddr *clientptr = (struct sockaddr *) &client;
+	char buf[1024], command[14], frec[100], srec[10];
+	long int lip;
+	int iport, newsocket, receiveLen, c, clientPort, fd, remaining, fileSize, readSize;
+	struct hostent *rem;
+	socklen_t clientlen;
+	listptr templist;
+	struct stat st;
+//	struct sigaction sa;
+//	sa.sa_handler=signal_handler;
+
+	while(1){
+//		if(sigaction(SIGINT, &sa,NULL)==-1)
+//			perror("SIGACTION");
+   		clientlen=sizeof(client);
+		printf("Listening for connections on port %d\n", *(int*)listenSocket);
+ 		//Accept Connection
+        pthread_mutex_lock(&accept_mutex);
+    	if((newsocket=accept(*(int*)listenSocket, clientptr, &clientlen))<0)
+			perror_exit("accept");
+        pthread_mutex_unlock(&accept_mutex);
+   
+    	//Find client's name
+    	if((rem=gethostbyaddr((char*)&client.sin_addr.s_addr,sizeof(client.sin_addr.s_addr),client.sin_family))==NULL){
+			herror("gethostbyaddr");
+			exit(1);
+    	}
+    	printf("Accepted connection from %s\n", rem->h_name);
+
+		receiveLen = recv(newsocket, buf, 1024 ,0);
+    	if (receiveLen == -1){
+        	printf("Error: receive has been  %d\n", newsocket);
+        	close(newsocket);
+        	exit(1);
+    	}
+		printf("I received %s\n", buf);
+
+		sscanf(buf,"%s %s %s", command, frec, srec);
+		printf("Received command: <%s>\n",command);
+
+		if( strcmp(command, "GET_FILE_LIST")==0) 
+			c=1;
+		if(strcmp(command, "GET_FILE")==0) 
+			c=2;
+		if(strcmp(command, "USER_OFF")==0){
+			lip=atol(frec);  // Convert to long int
+			iport=atoi(srec);
+			clientPort=ntohs(iport);
+			c=3;
+		}
+		if(strcmp(command, "USER_ON")==0){
+			lip=atol(frec);  // Convert to long int
+			iport=atoi(srec);
+			clientPort=ntohs(iport);
+			c=4;
+		}	
+		switch(c){
+			case 1:
+				//GET_FILE_LIST request
+				//Send the list with file names to the client that requested it 
+				templist=fileList;
+				while(templist!=NULL){
+					send(newsocket,templist->clientIP, strlen(templist->clientIP) +1,0); //clientIP==fileName (same struct)
+					templist=templist->next;
+				}
+				break;
+			case 2:
+				//GET_FILE request
+			
+				templist=fileList;
+				while(templist!=NULL){
+					if(isInList(templist,frec,0)){ //Send the file if we have it 
+						//Get the file Size
+						stat(templist->clientIP, &st);
+						fileSize = st.st_size;
+						if((fd = open(templist->clientIP, O_RDONLY)) < 0 ) {
+							printf("Error in sendFile : open\n");
+							exit(-1);
+						}
+						remaining=fileSize;
+						while (remaining > 0) {
+							readSize = (remaining > bufSize) ? bufSize : remaining;
+							if(read(fd,buf,readSize) == -1) {
+								printf("Error in writing file: read from file\n");
+								exit(-1);
+							}
+							send(newsocket,buf,readSize,0);
+							remaining = remaining - readSize;
+							memset(buf, '\0', bufSize);
+						}
+						close(fd);
+						break;
+					}
+					templist=templist->next;
+				}
+				break;
+			case 3:
+				//USER_OFF
+                dummy.sin_addr.s_addr = lip;
+                pthread_mutex_lock(&list_mutex);
+                deleteClient(&clientList, inet_ntoa(dummy.sin_addr), clientPort);
+                pthread_mutex_unlock(&list_mutex);
+                printf("USER_OFF: IP: %s, port: %d\n", inet_ntoa(dummy.sin_addr), clientPort);
+				break;
+			case 4:
+				//USER_ON
+                dummy.sin_addr.s_addr = lip;
+                pthread_mutex_lock(&list_mutex);
+                insertList(&clientList, inet_ntoa(dummy.sin_addr), clientPort);
+				print(clientList);
+                pthread_mutex_unlock(&list_mutex);
+                printf("USER_ON: IP: %s, port: %d\n", inet_ntoa(dummy.sin_addr), clientPort);
+				break;
+			default:
+				printf("Unknown command. Doing nothing!\n");
+				break;
+		}
+
+		close(newsocket);
+		break;
+	}
+}
 
 
 int main(int argc, char* argv[]){
 
-	char serverIP[10], buf[1024], myIP[12], command[14], recip[14], recClientPort[10], num[10], *ip;
-	long int lip;
-	int port, iport, serverPort, sock, newsocket, mysock, n, m, receiveLen, c, clientPort, numOfClients;
-	socklen_t clientlen;
-	struct sockaddr_in server, client, myserver, dummy;
+	char serverIP[10], buf[1024], myIP[12], command[14], *directory;
+	int port, serverPort, sock, mysock, receiveLen, numClients, clientPort, workerThreads;
+
+	struct sockaddr_in server,myserver, dummy;
 	struct sockaddr *serverptr = (struct sockaddr *) &server;
-	struct sockaddr *clientptr = (struct sockaddr *) &client;
 	struct sockaddr *myserverptr= (struct sockaddr *) &myserver;
 	struct hostent *rem;
-	listptr clientList=NULL;
 	
 
-	if(argc<6){
+	if(argc<13){
 		printf("Please give all inputs!\n");
-		printf("Example: ./server -p portNum -sp serverPort -sip serverIP\n");
+		printf("Example: ./client -p portNum -w workerThreads -sp serverPort -sip serverIP\n");
 		exit(1);
 	}
+
+	for(int i=1; i<argc; i++){
+    	if(argv[i]!=NULL){
+			//Directory path
+			if(!strcmp(argv[i], "-d")){
+				directory=malloc(strlen(argv[i+1]) +1);
+				strcpy(directory,argv[i+1]);			
+			}
+			//PortNum
+			else if(!strcmp(argv[i], "-p")){
+				port=atoi(argv[i+1]);
+			}
+			//Nunmber or threads
+			else if(!strcmp(argv[i], "-w")){
+				workerThreads=atoi(argv[i+1]);
+			}
+			//Buffer size
+			else if(!strcmp(argv[i], "-b")){
+				bufSize=atoi(argv[i+1]);
+			}
+			//Server port
+			else if(!strcmp(argv[i], "-sp")){
+				serverPort=atoi(argv[i+1]);
+			}
+			//Server IP
+			else if(!strcmp(argv[i], "-sip")){
+				strcpy(serverIP, argv[i+1]);
+			}	
+		}
+	}
+
 	strcpy(myIP, "127.0.0.1");
-	strcpy(serverIP,argv[6]);
-	port=atoi(argv[2]);
-	serverPort=atoi(argv[4]);
+	listFiles(directory, &fileList);
+
+	//Set up  and wait for connections from other clients or the server
+ 
+	//Create socket 
+	if((mysock=socket(AF_INET,SOCK_STREAM,0))<0)
+   		perror_exit("socket");
+
+	myserver.sin_family=AF_INET; //internet domain
+	myserver.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+	myserver.sin_port=htons(port); //given port
+
+	//Bind socket to addr
+	if((bind(mysock,myserverptr,sizeof(myserver)))<0)
+    	perror_exit("bind");
+
+	//Listen for connections
+	if(listen(mysock,5)<0)
+  	  perror_exit("listen");
+	printf("Listening for connections to port %d\n",port);
+
+    for (int i = 0; i < workerThreads-1; i++) {
+        pthread_t thr;
+        pthread_create(&thr, NULL, listen_for_conns, (void*)&mysock);
+    }
 
 	//Connect to server
 
@@ -57,13 +250,11 @@ int main(int argc, char* argv[]){
 
 	//message="LOG_ON"
 	inet_aton(myIP,&dummy.sin_addr);
-	n=numOfDigits(htons(port));
-	m=numOfDigits(dummy.sin_addr.s_addr);
-	snprintf(buf, 9 + strlen(myIP) + n +m, "LOG_ON %u %d" , dummy.sin_addr.s_addr, htons(port) );
+	snprintf(buf, sizeof(buf), "LOG_ON %u %d" , dummy.sin_addr.s_addr, htons(port) );
     //Send the character
-    if(send(sock,&buf,strlen(buf),0)==-1)
+    if(send(sock,buf,strlen(buf)+1,0)==-1)
 		perror_exit("write");
-close(sock);
+	close(sock);
 
 	//new connection for getclients request
 	if((sock=socket(AF_INET,SOCK_STREAM,0))<0)
@@ -74,129 +265,30 @@ close(sock);
 	printf("Connecting to %s serverPort %d\n",argv[4],serverPort);
 
 	//Send the GET_CLIENTS request 
-	if(send(sock, "GET_CLIENTS", strlen("GET_CLIENTS") +1 ,0)==-1)
+	snprintf(buf, sizeof(buf), "GET_CLIENTS %u %d" , dummy.sin_addr.s_addr, htons(port) );
+	if(send(sock, buf, strlen(buf)+1,0)==-1)
 		perror_exit("write");
 
-	while(1){
+    receiveLen = recv(sock, buf, 17 ,0); // get CLIENT_LIST 000x
+	if(receiveLen<0)
+		perror_exit("receive");
+    printf("Received CL: %s\n", buf);
+    sscanf(buf,"%s %d", command, &numClients);
+	for (int i = 0; i < numClients; i++){
 		//Receive client list
-		receiveLen = recv(sock, &buf, sizeof(buf) ,0);
-    	if (receiveLen == -1){
-        	printf("Error: receive has been  %d\n",sock);
-        	close(sock);
-			perror_exit("receive");
-    	}
-		printf("I received %s\n", buf);
-		sscanf(buf, "%s %s", command, num);
-		numOfClients=atoi(num);
-		while(numOfClients){
-			receiveLen = recv(sock, &buf, sizeof(buf) ,0);
-    		if (receiveLen == -1){
-        		printf("Error: receive has been  %d\n",sock);
-        		close(sock);
-				perror_exit("receive");
-    		}			
-			sscanf(buf,	"%s %s",recip, recClientPort);	
-	
-			//Convert ip and port to the correct format 
-			lip=atol(recip);  // Convert to long int 
-			dummy.sin_addr.s_addr=lip;
-			ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123)
-			iport=atoi(recClientPort);
-			clientPort=ntohs(iport);
-					printf("I received %s\n", buf);
-			//Insert received client to list
-			insertList(&clientList, ip, clientPort);
-			numOfClients--;
-		}
-		break;
+        recv(sock, &dummy.sin_addr.s_addr, sizeof(dummy.sin_addr.s_addr), 0);
+        recv(sock, &clientPort, sizeof(clientPort), 0);
+        dummy.sin_port = htons(clientPort);
+        printf("Got client %s:%d\n", inet_ntoa(dummy.sin_addr), ntohs(clientPort));
+        pthread_mutex_lock(&list_mutex);
+		insertList(&clientList, inet_ntoa(dummy.sin_addr), clientPort);
+        pthread_mutex_unlock(&list_mutex);
 	}
-print(clientList);
 	//Close socket 
 	close(sock);
 
-	//Set up  and wait for connections from other clients or the server
- 
-	//Create socket 
-	if((mysock=socket(AF_INET,SOCK_STREAM,0))<0)
-   		perror_exit("socket");
+    listen_for_conns((void*)&mysock);
 
-	myserver.sin_family=AF_INET; //internet domain
-	myserver.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
-	myserver.sin_port=htons(port); //given port
-
-	//Bind socket to addr
-	if((bind(mysock,myserverptr,sizeof(myserver)))<0)
-    	perror_exit("bind");
-
-	//Listen for connections
-	if(listen(mysock,5)<0)
-  	  perror_exit("listen");
-	printf("Listening for connections to port %d\n",port);
-
-	while(1){
-   		clientlen=sizeof(client);
-
- 		//Accept Connection
-    	if((newsocket=accept(mysock, clientptr, &clientlen))<0)
-			perror_exit("accept");
-   
-    	//Find client's name
-    	if((rem=gethostbyaddr((char*)&client.sin_addr.s_addr,sizeof(client.sin_addr.s_addr),client.sin_family))==NULL){
-			herror("gethostbyaddr");
-			exit(1);
-    	}
-    	printf("Accepted connection from %s\n", rem->h_name);
-
-		receiveLen = recv(newsocket, &buf, 1024 ,0);
-    	if (receiveLen == -1){
-        	printf("Error: receive has been  %d\n", newsocket);
-        	close(newsocket);
-        	exit(1);
-    	}
-		printf("I received %s\n", buf);
-
-		sscanf(buf,"%s %s %s", command, recip, recClientPort);
-		printf("Received command: <%s>\n",command);
-		lip=atol(recip);  // Convert to long int
-		ip=inet_ntoa(dummy.sin_addr); // convert to string format ex 123.123.123.123) 
-		dummy.sin_addr.s_addr=lip;
-
-		iport=atoi(recClientPort);
-		clientPort=ntohs(iport);
-
-		if( strcmp(command, "GET_FILE_LIST")==0) 
-			c=1;
-		if(strcmp(command, "GET_FILE")==0) 
-			c=2;
-		if(strcmp(command, "USER_OFF")==0)
-			c=3;
-		if(strcmp(command, "USER_ON")==0)
-			c=4;
-
-		switch(c){
-			case 1:
-				//GET_FILE_LIST
-				break;
-			case 2:
-				//GET_FILE
-				break;
-			case 3:
-				//USER_OFF
-				break;
-			case 4:
-				//USER_ON
-				printf("IP: %s, port: %d\n", ip, clientPort);
-				
-				break;
-			default:
-				printf("Unknown command. Doing nothing!\n");
-				break;
-		}
-
-		close(newsocket);
-		break;
-	}
-	close(sock);
 	return 0;
 
 }

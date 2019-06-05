@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include "header.h"
 #include <string.h>
+#include <dirent.h>
 
 
 
@@ -60,7 +61,7 @@ int isInList(listptr mylist, char* IP, int port){
 
 	while(mylist!=NULL){
 		if((strcmp(mylist->clientIP,IP)==0)&&(mylist->clientPort==port)){
-			printf("Found it.\n");
+			//printf("Found it.\n");
 			return 1;
 		}
 		else
@@ -94,5 +95,33 @@ void perror_exit(char* message){
     exit(EXIT_FAILURE);
 }
 
+void listFiles(char *name, listptr *files){
+
+    DIR *dir;
+    struct dirent *entry;
+	char path[1024];
+    if((dir = opendir(name)) == NULL) {
+        fprintf(stderr,"cannot open directory: %s\n", name);
+        return;
+    }
+
+    while((entry = readdir(dir)) != NULL) {
+        if(entry->d_type== DT_DIR) {
+
+            //Found a directory, but ignore . and .. */
+            if(strcmp(".",entry->d_name) == 0 ||
+                strcmp("..",entry->d_name) == 0)
+                continue;
+			snprintf(path, sizeof(path), "%s/%s", name, entry->d_name);
+            // Recurse
+            listFiles(path,files);
+        }
+		else if (entry->d_type==DT_REG){
+			snprintf(path, sizeof(path), "%s/%s", name, entry->d_name);
+			insertList(files, path, 0);			
+		}
+    }
+    closedir(dir);
+}
 
 
